@@ -1,0 +1,2047 @@
+Below is a **full step-by-step roadmap** to build a Zomato/Swiggy-like backend using **Python + FastAPI**.  
+I have divided it into phases so you know **what to build, when to build it, and what details to include**.
+
+Each top-level point is **one action item**. The nested bullets explain the **details** you should implement.
+
+---
+
+# 0. Build Strategy
+
+## Use this architecture approach
+- Build a **modular monolith first**, not 20 microservices.
+- Split code by domain: `auth`, `restaurants`, `menu`, `orders`, `payments`, `delivery`, `tracking`.
+- Add async workers later for dispatch, notifications, and event processing.
+- Use **Docker Compose** for local development.
+
+## Recommended stack
+- FastAPI
+- PostgreSQL + PostGIS
+- SQLAlchemy 2.0 async
+- Alembic migrations
+- Redis
+- RabbitMQ
+- Celery or `aio-pika` workers
+- Pydantic v2
+- JWT authentication
+- WebSockets
+- Pytest
+
+---
+
+# 1. Milewise Roadmap Overview
+
+| Milestone | What You Build | Why |
+|---|---|---|
+| M1 | Project setup, Docker, FastAPI skeleton | Local foundation |
+| M2 | Database schemas and migrations | Core domain models |
+| M3 | Authentication and RBAC | Secure APIs |
+| M4 | Restaurant and menu management | Supply side catalog |
+| M5 | Geospatial restaurant discovery | Nearby search |
+| M6 | Cart and checkout | Order creation |
+| M7 | Payments and webhooks | Paid order lifecycle |
+| M8 | Order state machine | Reliable status transitions |
+| M9 | RabbitMQ / event system | Async workflows |
+| M10 | Driver location and availability | Delivery side input |
+| M11 | Driver dispatch engine | Assign drivers to orders |
+| M12 | Live tracking WebSockets | Real-time UX |
+| M13 | Notifications | Customer/driver updates |
+| M14 | Testing, observability, deployment | Production readiness |
+
+---
+
+# 2. Detailed Step-by-Step Build Plan
+
+---
+
+## Phase 0 — Local Project Foundation
+
+### Goal
+Create a working FastAPI project with Docker, environment config, and basic health checks.
+
+- [ ] **Create a Git repository.**
+  - Use a clean name like `food-delivery-backend`.
+  - Add `.gitignore` for Python, `.env`, `__pycache__`, `.venv`.
+
+- [ ] **Install Python 3.12+ and create a virtual environment.**
+  - Use `python -m venv .venv`.
+  - Activate it before installing packages.
+
+- [ ] **Create the backend folder structure.**
+  - Example:
+    ```text
+    app/
+      api/
+      core/
+      models/
+      schemas/
+      services/
+      repositories/
+      workers/
+      events/
+    migrations/
+    tests/
+    docker/
+    ```
+
+- [ ] **Add core Python dependencies.**
+  - FastAPI
+  - Uvicorn
+  - SQLAlchemy async
+  - asyncpg
+  - Alembic
+  - GeoAlchemy2
+  - Pydantic Settings
+  - Redis
+  - Celery or aio-pika
+  - PyJWT / python-jose
+  - passlib[argon2]
+  - httpx
+  - pytest
+
+- [ ] **Create `requirements.txt` or `pyproject.toml`.**
+  - Pin major versions.
+  - Separate dev dependencies: pytest, ruff, mypy, black.
+
+- [ ] **Create a Docker Compose file.**
+  - Add services:
+    - PostgreSQL with PostGIS
+    - Redis
+    - RabbitMQ
+    - FastAPI app
+    - Worker
+
+- [ ] **Use a PostGIS-enabled Postgres image.**
+  - Example: `postgis/postgis`.
+  - This avoids manual PostGIS installation.
+
+- [ ] **Create `.env` and `.env.example`.**
+  - Include:
+    - database URL
+    - Redis URL
+    - RabbitMQ URL
+    - JWT secret
+    - payment provider keys
+    - app environment
+
+- [ ] **Create a FastAPI entrypoint.**
+  - File: `app/main.py`.
+  - Create FastAPI app instance.
+  - Add API version prefix `/api/v1`.
+
+- [ ] **Add settings management.**
+  - Use Pydantic Settings.
+  - Load config from environment variables.
+  - Validate required variables at startup.
+
+- [ ] **Add a health endpoint.**
+  - Route: `GET /health`.
+  - Return app status, DB status, Redis status.
+
+- [ ] **Add structured logging.**
+  - Use `structlog` or standard logging with JSON format.
+  - Add request ID middleware later.
+
+- [ ] **Add linting and formatting.**
+  - Use Ruff, Black, or Flake8.
+  - Add pre-commit hooks if possible.
+
+### Done when:
+You can run FastAPI locally with `uvicorn`, and Docker Compose starts PostGIS, Redis, and RabbitMQ.
+
+---
+
+## Phase 1 — Database Foundation
+
+### Goal
+Design and create the core database tables with migrations.
+
+- [ ] **Install SQLAlchemy 2.0 async and GeoAlchemy2.**
+  - Use async engine with `asyncpg`.
+  - Use GeoAlchemy2 for spatial columns.
+
+- [ ] **Create a database session dependency.**
+  - Provide `get_db()` for FastAPI dependency injection.
+  - Use async sessions.
+
+- [ ] **Create a declarative Base class.**
+  - Add common columns:
+    - `id`
+    - `created_at`
+    - `updated_at`
+
+- [ ] **Use UUID or BIGSERIAL primary keys.**
+  - UUID is better for distributed systems.
+  - UUIDv7 is good for sortable IDs.
+
+- [ ] **Initialize Alembic.**
+  - Configure Alembic for async SQLAlchemy.
+  - Use migrations from day one.
+
+- [ ] **Enable PostGIS extension.**
+  - Add migration:
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS postgis;
+    ```
+
+- [ ] **Create `users` table.**
+  - Fields:
+    - id
+    - email
+    - phone
+    - hashed_password
+    - role
+    - is_active
+    - created_at
+  - Role enum:
+    - CUSTOMER
+    - RESTAURANT
+    - DRIVER
+    - ADMIN
+
+- [ ] **Create `addresses` table.**
+  - Fields:
+    - id
+    - user_id
+    - label
+    - line1
+    - city
+    - lat
+    - lng
+    - geo_point
+
+- [ ] **Create `restaurants` table.**
+  - Fields:
+    - id
+    - owner_id
+    - name
+    - slug
+    - description
+    - location_point
+    - is_active
+    - is_open
+    - delivery_radius_meters
+    - average_prep_time_minutes
+
+- [ ] **Use PostGIS geography/geometry for restaurant location.**
+  - Prefer `POINT` with SRID 4326.
+  - Use geography for meter-based distance.
+
+- [ ] **Create spatial index for restaurants.**
+  - Use GIST index.
+  - Required for fast nearby queries.
+
+- [ ] **Create `menu_items` table.**
+  - Fields:
+    - id
+    - restaurant_id
+    - name
+    - description
+    - price
+    - is_available
+    - category
+    - created_at
+
+- [ ] **Use `Decimal` for money fields.**
+  - Never use float for amounts.
+
+- [ ] **Create `orders` table.**
+  - Fields:
+    - id
+    - customer_id
+    - restaurant_id
+    - driver_id
+    - status
+    - subtotal
+    - delivery_fee
+    - tax
+    - total_amount
+    - delivery_address_id
+    - idempotency_key
+    - version
+    - created_at
+
+- [ ] **Create `order_items` table.**
+  - Fields:
+    - id
+    - order_id
+    - menu_item_id
+    - item_name_snapshot
+    - unit_price_snapshot
+    - quantity
+    - total_price
+
+- [ ] **Create `payments` table.**
+  - Fields:
+    - id
+    - order_id
+    - provider
+    - provider_payment_id
+    - status
+    - amount
+    - raw_webhook_payload
+    - created_at
+
+- [ ] **Create `driver_profiles` table.**
+  - Fields:
+    - id
+    - user_id
+    - is_online
+    - current_location_point
+    - last_seen_at
+    - vehicle_type
+
+- [ ] **Create `delivery_jobs` table.**
+  - Fields:
+    - id
+    - order_id
+    - restaurant_location
+    - status
+    - assigned_driver_id
+    - created_at
+
+- [ ] **Create `driver_offers` table.**
+  - Fields:
+    - id
+    - delivery_job_id
+    - driver_id
+    - offer_status
+    - expires_at
+    - accepted_at
+
+- [ ] **Create `order_events` audit table.**
+  - Fields:
+    - id
+    - order_id
+    - old_status
+    - new_status
+    - actor_id
+    - reason
+    - metadata
+    - created_at
+
+- [ ] **Create `outbox_events` table.**
+  - Fields:
+    - id
+    - aggregate_type
+    - aggregate_id
+    - event_type
+    - payload
+    - published
+    - created_at
+
+- [ ] **Add database constraints.**
+  - Unique email.
+  - Positive quantity.
+  - Positive price.
+  - Valid status enums.
+  - Foreign keys.
+
+- [ ] **Run migrations and verify tables.**
+  - Use `alembic upgrade head`.
+  - Inspect DB using psql or GUI.
+
+### Done when:
+Your database has all core tables, spatial indexes, and migrations run cleanly.
+
+---
+
+## Phase 2 — Authentication and RBAC
+
+### Goal
+Create secure login/signup and role-based route protection.
+
+- [ ] **Create auth schemas.**
+  - RegisterRequest
+  - LoginRequest
+  - TokenResponse
+  - UserResponse
+
+- [ ] **Implement password hashing.**
+  - Use Argon2 or bcrypt.
+  - Never store plain passwords.
+
+- [ ] **Create user registration endpoint.**
+  - Route: `POST /api/v1/auth/register`.
+  - Validate email/phone uniqueness.
+  - Hash password.
+  - Default role: CUSTOMER.
+
+- [ ] **Create login endpoint.**
+  - Route: `POST /api/v1/auth/login`.
+  - Verify email and password.
+  - Return JWT access token.
+
+- [ ] **Create JWT token generation.**
+  - Include:
+    - sub
+    - role
+    - exp
+    - iat
+    - jti
+
+- [ ] **Create JWT validation dependency.**
+  - Extract token from Authorization header.
+  - Validate signature and expiry.
+  - Load user from DB if needed.
+
+- [ ] **Create `get_current_user` dependency.**
+  - Returns current authenticated user.
+  - Raises 401 if invalid token.
+
+- [ ] **Create role-based access dependency.**
+  - Example:
+    - `require_role(Role.RESTAURANT)`
+    - `require_role(Role.DRIVER)`
+  - Reject unauthorized roles.
+
+- [ ] **Add refresh token endpoint.**
+  - Route: `POST /api/v1/auth/refresh`.
+  - Rotate refresh token if possible.
+
+- [ ] **Add logout/token invalidation strategy.**
+  - For MVP, short-lived access tokens are okay.
+  - For production, use token blocklist or rotating refresh tokens.
+
+- [ ] **Protect routes by role.**
+  - Customers can order.
+  - Restaurants can manage menus.
+  - Drivers can receive offers.
+  - Admins can manage everything.
+
+- [ ] **Add auth tests.**
+  - Register success.
+  - Duplicate email failure.
+  - Login success/failure.
+  - Protected route with invalid token.
+
+### Done when:
+Users can register, login, and only allowed roles can access protected endpoints.
+
+---
+
+## Phase 3 — Restaurant Onboarding and Menu Management
+
+### Goal
+Let restaurant owners create restaurants and manage menus.
+
+- [ ] **Create restaurant creation endpoint.**
+  - Route: `POST /api/v1/restaurants`.
+  - Allowed role: RESTAURANT or ADMIN.
+  - Save:
+    - name
+    - description
+    - lat/lng
+    - delivery radius
+    - prep time
+
+- [ ] **Convert lat/lng to PostGIS point.**
+  - Store as SRID 4326.
+  - Validate coordinate range.
+
+- [ ] **Create restaurant update endpoint.**
+  - Route: `PATCH /api/v1/restaurants/{id}`.
+  - Ensure owner can edit only their restaurant.
+
+- [ ] **Create activate/deactivate restaurant endpoint.**
+  - Toggle `is_active`.
+  - Inactive restaurants should not appear in search.
+
+- [ ] **Create open/close restaurant endpoint.**
+  - Toggle `is_open`.
+  - Closed restaurants cannot accept orders.
+
+- [ ] **Create menu item creation endpoint.**
+  - Route: `POST /api/v1/menu-items`.
+  - Validate restaurant ownership.
+  - Store price as Decimal.
+
+- [ ] **Create menu item update endpoint.**
+  - Route: `PATCH /api/v1/menu-items/{id}`.
+  - Allow price/name/description update.
+
+- [ ] **Create menu availability toggle.**
+  - Route: `PATCH /api/v1/menu-items/{id}/availability`.
+  - Use this for out-of-stock items.
+
+- [ ] **Create restaurant detail endpoint.**
+  - Route: `GET /api/v1/restaurants/{id}`.
+  - Include:
+    - restaurant info
+    - open status
+    - menu items
+
+- [ ] **Create restaurant menu endpoint.**
+  - Route: `GET /api/v1/restaurants/{id}/menu`.
+  - Only show available items to customers.
+
+- [ ] **Add pagination for restaurant lists.**
+  - Use limit/offset or cursor pagination.
+
+- [ ] **Add authorization checks.**
+  - Restaurant owner cannot edit another restaurant.
+  - Admin can override.
+
+- [ ] **Add restaurant tests.**
+  - Create restaurant.
+  - Update menu.
+  - Unauthorized access.
+  - Closed restaurant behavior.
+
+### Done when:
+A restaurant owner can onboard, create menu items, and customers can view restaurant/menu data.
+
+---
+
+## Phase 4 — Geospatial Discovery
+
+### Goal
+Show nearby restaurants based on customer location and delivery radius.
+
+- [ ] **Create nearby restaurant search endpoint.**
+  - Route:
+    ```text
+    GET /api/v1/restaurants/nearby?lat=...&lng=...&radius_km=5
+    ```
+
+- [ ] **Validate input coordinates.**
+  - Latitude: -90 to 90.
+  - Longitude: -180 to 180.
+  - Radius max limit.
+
+- [ ] **Use PostGIS spatial query.**
+  - Use `ST_DWithin`.
+  - Use geography for meter-based radius.
+
+- [ ] **Filter only active and open restaurants.**
+  - `is_active = true`
+  - `is_open = true`
+
+- [ ] **Return distance in meters.**
+  - Use `ST_Distance`.
+  - Sort by distance ascending.
+
+- [ ] **Return ETA estimate.**
+  - MVP formula:
+    ```text
+    ETA = prep_time + travel_time_estimate
+    ```
+  - Travel time can be distance / average driver speed.
+
+- [ ] **Add pagination and sorting.**
+  - Sort by:
+    - distance
+    - rating later
+    - delivery fee later
+
+- [ ] **Add Redis cache for nearby search.**
+  - Key by:
+    - rounded lat/lng
+    - radius
+  - Short TTL: 10–30 seconds.
+
+- [ ] **Add spatial query tests.**
+  - Restaurant inside radius.
+  - Restaurant outside radius.
+  - Closed restaurant excluded.
+
+### Done when:
+Customer can request nearby restaurants and get correct results using PostGIS.
+
+---
+
+## Phase 5 — Cart Service
+
+### Goal
+Build a fast cart using Redis before creating persistent orders.
+
+- [ ] **Decide cart storage strategy.**
+  - Use Redis for fast temporary cart.
+  - Persist only at checkout.
+
+- [ ] **Define cart key structure.**
+  - Example:
+    ```text
+    cart:user:{user_id}
+    ```
+
+- [ ] **Restrict cart to one restaurant at a time.**
+  - If user adds item from another restaurant:
+    - clear old cart or
+    - return error.
+
+- [ ] **Create add-to-cart endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/cart/items
+    ```
+  - Input:
+    - menu_item_id
+    - quantity
+
+- [ ] **Validate menu item before adding.**
+  - Item exists.
+  - Item available.
+  - Restaurant active/open.
+
+- [ ] **Store price snapshot in cart.**
+  - Store:
+    - menu_item_id
+    - restaurant_id
+    - item_name
+    - unit_price
+    - quantity
+
+- [ ] **Create update cart item endpoint.**
+  - Route:
+    ```text
+    PATCH /api/v1/cart/items/{menu_item_id}
+    ```
+  - Update quantity atomically.
+
+- [ ] **Create remove cart item endpoint.**
+  - Route:
+    ```text
+    DELETE /api/v1/cart/items/{menu_item_id}
+    ```
+
+- [ ] **Create get cart endpoint.**
+  - Route:
+    ```text
+    GET /api/v1/cart
+    ```
+  - Return items and estimated total.
+
+- [ ] **Add cart expiry.**
+  - Redis TTL:
+    - 30 minutes to 24 hours.
+
+- [ ] **Add cart tests.**
+  - Add item.
+  - Update quantity.
+  - Remove item.
+  - Invalid item.
+  - Different restaurant conflict.
+
+### Done when:
+Users can add, update, and remove items from a Redis-backed cart.
+
+---
+
+## Phase 6 — Checkout and Order Creation
+
+### Goal
+Convert cart into a persistent order with server-side pricing.
+
+- [ ] **Create checkout endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/checkout
+    ```
+
+- [ ] **Require idempotency key header.**
+  - Header:
+    ```text
+    Idempotency-Key: uuid
+    ```
+  - Prevent duplicate order creation.
+
+- [ ] **Validate cart before checkout.**
+  - Cart exists.
+  - Restaurant open.
+  - Items available.
+  - Customer address exists.
+  - Address is within restaurant delivery radius.
+
+- [ ] **Recalculate prices server-side.**
+  - Never trust client totals.
+  - Fetch latest menu prices.
+  - Calculate:
+    - subtotal
+    - tax
+    - delivery_fee
+    - total_amount
+
+- [ ] **Create delivery fee service.**
+  - MVP:
+    - flat fee
+  - Later:
+    - distance-based fee
+    - surge fee
+
+- [ ] **Create order in database.**
+  - Status:
+    ```text
+    PENDING_PAYMENT
+    ```
+  - Store:
+    - customer_id
+    - restaurant_id
+    - delivery_address_id
+    - total_amount
+    - idempotency_key
+
+- [ ] **Create order items atomically.**
+  - Use one DB transaction.
+  - Store item snapshots:
+    - name
+    - price
+    - quantity
+
+- [ ] **Clear or lock cart after checkout.**
+  - Prevent duplicate checkout from same cart.
+
+- [ ] **Return order ID and payment intent data.**
+  - Order status:
+    ```text
+    PENDING_PAYMENT
+    ```
+
+- [ ] **Add checkout tests.**
+  - Successful checkout.
+  - Duplicate idempotency key.
+  - Item unavailable.
+  - Restaurant closed.
+  - Address outside radius.
+
+### Done when:
+Checkout creates a valid pending order with accurate pricing and prevents duplicate submissions.
+
+---
+
+## Phase 7 — Payment Integration
+
+### Goal
+Handle payment creation, webhook confirmation, and failure cases safely.
+
+- [ ] **Choose payment provider.**
+  - Razorpay
+  - Stripe
+  - Mock provider for local dev
+
+- [ ] **Create payment provider abstraction.**
+  - Interface:
+    - create_payment
+    - verify_webhook
+    - refund_payment
+
+- [ ] **Create payment intent endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/payments/intent
+    ```
+  - Input:
+    - order_id
+  - Create provider payment session.
+
+- [ ] **Create payment record in database.**
+  - Status:
+    - CREATED
+    - PENDING
+    - SUCCESS
+    - FAILED
+    - REFUNDED
+
+- [ ] **Do not trust client-side payment success.**
+  - Only webhook or provider verification should confirm payment.
+
+- [ ] **Create payment webhook endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/payments/webhook
+    ```
+
+- [ ] **Verify webhook signature.**
+  - Use raw request body.
+  - Reject invalid signature.
+
+- [ ] **Make webhook processing idempotent.**
+  - Store provider event ID.
+  - If event already processed, return success.
+
+- [ ] **Handle payment success.**
+  - Update payment record.
+  - Transition order to:
+    ```text
+    PAID
+    ```
+
+- [ ] **Handle payment failure.**
+  - Update payment record.
+  - Keep order:
+    ```text
+    PENDING_PAYMENT
+    ```
+  - Allow retry until expiry.
+
+- [ ] **Add order expiry for unpaid orders.**
+  - Example:
+    - expire after 10 minutes.
+  - Use background job.
+
+- [ ] **Add refund hook for failed downstream steps.**
+  - If payment succeeds but order cannot proceed:
+    - trigger refund saga.
+
+- [ ] **Add payment tests.**
+  - Valid webhook.
+  - Invalid signature.
+  - Duplicate webhook.
+  - Failed payment.
+  - Payment success transitions order.
+
+### Done when:
+Payment webhooks safely move orders from `PENDING_PAYMENT` to `PAID`.
+
+---
+
+## Phase 8 — Order State Machine
+
+### Goal
+Make order transitions controlled, auditable, and idempotent.
+
+- [ ] **Define order statuses.**
+  - Example:
+    ```text
+    PENDING_PAYMENT
+    PAID
+    RESTAURANT_ACCEPTED
+    PREPARING
+    DRIVER_ASSIGNED
+    PICKED_UP
+    DELIVERED
+    CANCELLED
+    REFUNDED
+    ```
+
+- [ ] **Define allowed transitions.**
+  - Example:
+    - PENDING_PAYMENT → PAID
+    - PAID → RESTAURANT_ACCEPTED
+    - RESTAURANT_ACCEPTED → PREPARING
+    - PREPARING → DRIVER_ASSIGNED
+    - DRIVER_ASSIGNED → PICKED_UP
+    - PICKED_UP → DELIVERED
+
+- [ ] **Create a state transition service.**
+  - Single service handles all status changes.
+  - Do not update status randomly in endpoints.
+
+- [ ] **Guard illegal transitions.**
+  - Example:
+    - Cannot go from PAID directly to DELIVERED.
+  - Throw domain error.
+
+- [ ] **Make transitions idempotent.**
+  - If event tries to move already-moved order:
+    - no-op if safe.
+
+- [ ] **Use optimistic locking.**
+  - Add `version` column to orders.
+  - Prevent concurrent conflicting updates.
+
+- [ ] **Record every transition in `order_events`.**
+  - Store:
+    - old status
+    - new status
+    - actor
+    - reason
+    - timestamp
+
+- [ ] **Emit domain events on transition.**
+  - Example:
+    - order.paid
+    - order.accepted
+    - order.driver_assigned
+    - order.delivered
+
+- [ ] **Add state machine tests.**
+  - Valid transitions.
+  - Invalid transitions.
+  - Duplicate transitions.
+  - Unauthorized transitions.
+
+### Done when:
+Order status changes are predictable, audited, and impossible to corrupt through invalid transitions.
+
+---
+
+## Phase 9 — Event System with RabbitMQ
+
+### Goal
+Move from synchronous APIs to event-driven workflows.
+
+- [ ] **Run RabbitMQ in Docker.**
+  - Expose management UI for local debugging.
+
+- [ ] **Decide event transport.**
+  - Option 1:
+    - Celery + RabbitMQ
+  - Option 2:
+    - aio-pika consumer workers
+
+- [ ] **Define event naming convention.**
+  - Example:
+    ```text
+    order.created
+    order.paid
+    delivery.job_created
+    driver.offer_sent
+    driver.assigned
+    order.status_changed
+    ```
+
+- [ ] **Create event schema models.**
+  - Use Pydantic.
+  - Include:
+    - event_id
+    - event_type
+    - occurred_at
+    - payload
+
+- [ ] **Use transactional outbox pattern.**
+  - Save event to `outbox_events` in same DB transaction as order update.
+  - Publisher worker reads and publishes to RabbitMQ.
+
+- [ ] **Create outbox publisher worker.**
+  - Polls unpublished events.
+  - Publishes to exchange.
+  - Marks events published.
+
+- [ ] **Create RabbitMQ exchanges and queues.**
+  - Use durable queues.
+  - Use routing keys by event type.
+
+- [ ] **Create consumers for important events.**
+  - Example:
+    - dispatch worker listens to `order.paid`
+    - notification worker listens to `order.status_changed`
+
+- [ ] **Make consumers idempotent.**
+  - Store processed event IDs.
+  - Handle duplicate delivery safely.
+
+- [ ] **Add retry and DLQ.**
+  - Retry transient errors.
+  - Send failed messages to Dead Letter Queue.
+
+- [ ] **Add event tests.**
+  - Event published after payment.
+  - Consumer handles duplicate.
+  - Invalid payload goes to DLQ.
+
+### Done when:
+When an order becomes paid, an event is reliably published and consumed by downstream workers.
+
+---
+
+## Phase 10 — Driver Availability and Location
+
+### Goal
+Let drivers come online and stream GPS locations.
+
+- [ ] **Create driver profile endpoint.**
+  - Route:
+    ```text
+    GET /api/v1/driver/profile
+    ```
+
+- [ ] **Create driver online/offline endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/driver/status
+    ```
+  - Body:
+    ```json
+    { "is_online": true }
+    ```
+
+- [ ] **Store driver online state.**
+  - Update `driver_profiles.is_online`.
+  - Update Redis online driver set.
+
+- [ ] **Add Redis key for online drivers.**
+  - Use Redis GEO set:
+    ```text
+    drivers:online
+    ```
+
+- [ ] **Create driver location WebSocket endpoint.**
+  - Route:
+    ```text
+    WS /ws/v1/driver/location
+    ```
+
+- [ ] **Authenticate driver WebSocket.**
+  - Use JWT token via:
+    - query param, or
+    - first auth message.
+  - Do not log tokens.
+
+- [ ] **Validate incoming GPS payload.**
+  - Required:
+    - lat
+    - lng
+    - timestamp
+  - Reject invalid coordinates.
+
+- [ ] **Store latest driver location in Redis.**
+  - Key:
+    ```text
+    driver:location:{driver_id}
+    ```
+  - TTL optional.
+
+- [ ] **Add driver to Redis GEO index.**
+  - Command concept:
+    ```text
+    GEOADD drivers:online lng lat driver_id
+    ```
+
+- [ ] **Persist driver location to PostGIS periodically.**
+  - Do not write to DB every second if high traffic.
+  - Batch or throttle:
+    - every 3–5 seconds.
+
+- [ ] **Add driver heartbeat/TTL.**
+  - If no location for X seconds:
+    - mark offline.
+    - remove from GEO set.
+
+- [ ] **Add driver location tests.**
+  - Connect WS.
+  - Invalid token.
+  - Invalid coordinates.
+  - Redis updated.
+
+### Done when:
+Online drivers stream location updates, and their latest position is stored in Redis/PostGIS.
+
+---
+
+## Phase 11 — Driver Matching and Dispatch Engine
+
+### Goal
+Assign the best available driver to a paid order.
+
+- [ ] **Create delivery job when order becomes PAID.**
+  - Trigger from event consumer.
+  - Store:
+    - order_id
+    - restaurant location
+    - status: PENDING_ASSIGNMENT
+
+- [ ] **Create dispatcher worker.**
+  - Consumes:
+    ```text
+    order.paid
+    ```
+  - Starts driver matching.
+
+- [ ] **Acquire distributed lock for dispatch.**
+  - Key:
+    ```text
+    lock:dispatch:order:{order_id}
+    ```
+  - Prevent duplicate dispatch jobs.
+
+- [ ] **Find nearby drivers.**
+  - Use Redis GEOSEARCH:
+    - radius 1–2 km initially.
+  - Or PostGIS query on driver location.
+
+- [ ] **Filter eligible drivers.**
+  - online
+  - not currently on active order
+  - within radius
+  - vehicle type valid
+
+- [ ] **Create delivery offer records.**
+  - Status:
+    - OFFERED
+    - ACCEPTED
+    - DECLINED
+    - EXPIRED
+
+- [ ] **Send offer to driver.**
+  - Use:
+    - WebSocket
+    - push notification later
+  - Include:
+    - job_id
+    - restaurant location
+    - pickup address
+    - expiry time
+
+- [ ] **Make offers time-bound.**
+  - Example:
+    - 10–15 seconds.
+  - If driver does not respond, expire offer.
+
+- [ ] **Create driver accept endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/delivery/offers/{offer_id}/accept
+    ```
+
+- [ ] **Validate offer before accepting.**
+  - Offer exists.
+  - Offer belongs to driver.
+  - Offer not expired.
+  - Delivery job still unassigned.
+
+- [ ] **Use DB constraint to prevent double assignment.**
+  - Redis lock helps.
+  - Database must be final safety net.
+  - Example:
+    - unique active assignment per order.
+
+- [ ] **Update order and delivery job on accept.**
+  - Order status:
+    ```text
+    DRIVER_ASSIGNED
+    ```
+  - Delivery job:
+    - assigned_driver_id
+    - status ASSIGNED
+
+- [ ] **Handle driver decline.**
+  - Mark offer DECLINED.
+  - Try next driver.
+
+- [ ] **Handle offer timeout.**
+  - Mark offer EXPIRED.
+  - Retry with wider radius.
+
+- [ ] **Add retry policy.**
+  - Increase radius:
+    - 1 km
+    - 2 km
+    - 3 km
+  - Limit retries.
+
+- [ ] **Add fallback for no drivers.**
+  - Status:
+    ```text
+    DISPATCH_FAILED
+    ```
+  - Notify admin/support.
+
+- [ ] **Add dispatch tests.**
+  - Driver accepts.
+  - Two drivers race for same order.
+  - Offer expired.
+  - No drivers available.
+
+### Done when:
+A paid order can be assigned to exactly one driver safely.
+
+---
+
+## Phase 12 — Order Lifecycle Actions
+
+### Goal
+Allow restaurant and driver to move the order forward.
+
+- [ ] **Create restaurant accept order endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/{order_id}/accept
+    ```
+  - Allowed role: RESTAURANT.
+  - Transition:
+    ```text
+    PAID → RESTAURANT_ACCEPTED
+    ```
+
+- [ ] **Create restaurant reject order endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/{order_id}/reject
+    ```
+  - Trigger refund flow if paid.
+
+- [ ] **Create mark preparing endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/{order_id}/preparing
+    ```
+
+- [ ] **Create mark ready for pickup endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/{order_id}/ready
+    ```
+  - Optional but useful for dispatch timing.
+
+- [ ] **Create driver pickup endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/{order_id}/pickup
+    ```
+  - Allowed role: DRIVER.
+  - Validate driver is assigned.
+
+- [ ] **Create driver deliver endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/{order_id}/deliver
+    ```
+  - Transition:
+    ```text
+    PICKED_UP → DELIVERED
+    ```
+
+- [ ] **Create customer cancel endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/orders/{order_id}/cancel
+    ```
+  - Rules:
+    - allowed before restaurant acceptance maybe
+    - refund policy applies
+
+- [ ] **Create admin override endpoints.**
+  - Admin can:
+    - cancel
+    - refund
+    - reassign
+    - inspect order timeline
+
+- [ ] **Add lifecycle tests.**
+  - Restaurant accepts.
+  - Driver picks up.
+  - Driver delivers.
+  - Unauthorized role blocked.
+
+### Done when:
+The full order lifecycle works from paid to delivered with role-safe endpoints.
+
+---
+
+## Phase 13 — Real-Time Tracking with WebSockets
+
+### Goal
+Stream order status and driver location to customers in real time.
+
+- [ ] **Create customer tracking WebSocket endpoint.**
+  - Route:
+    ```text
+    WS /ws/v1/orders/{order_id}/track
+    ```
+
+- [ ] **Authenticate customer WebSocket.**
+  - Validate JWT.
+  - Verify user owns the order.
+
+- [ ] **Send initial order snapshot on connect.**
+  - Include:
+    - order status
+    - restaurant info
+    - driver info if assigned
+    - latest driver location
+
+- [ ] **Subscribe to order status channel.**
+  - Redis channel:
+    ```text
+    order:status:{order_id}
+    ```
+
+- [ ] **Publish status changes to Redis.**
+  - Whenever order status changes:
+    - publish JSON event.
+
+- [ ] **Subscribe to driver location channel.**
+  - Redis channel:
+    ```text
+    driver:location:{driver_id}
+    ```
+
+- [ ] **Forward driver location to customer.**
+  - Send:
+    - lat
+    - lng
+    - timestamp
+    - maybe eta
+
+- [ ] **Handle driver assignment after WebSocket connected.**
+  - When driver assigned:
+    - switch subscription to new driver channel.
+
+- [ ] **Support reconnect behavior.**
+  - Client can request last known state.
+  - Store latest state in Redis for quick snapshot.
+
+- [ ] **Add WebSocket heartbeat.**
+  - Ping/pong.
+  - Detect dead connections.
+
+- [ ] **Make WebSocket layer horizontally scalable.**
+  - FastAPI instance should not rely only on local memory.
+  - Redis Pub/Sub broadcasts across instances.
+
+- [ ] **Add tracking tests.**
+  - Connect as owner.
+  - Forbidden for other user.
+  - Receive status update.
+  - Receive driver location update.
+
+### Done when:
+Customer can see live order status and driver location without refreshing.
+
+---
+
+## Phase 14 — Notifications
+
+### Goal
+Notify users about important order events.
+
+- [ ] **Create notification service.**
+  - Abstract notification delivery.
+  - Channels:
+    - WebSocket
+    - push
+    - SMS
+    - email
+
+- [ ] **Define notification events.**
+  - Order confirmed
+  - Restaurant accepted
+  - Driver assigned
+  - Driver arrived
+  - Order picked up
+  - Order delivered
+  - Order cancelled
+
+- [ ] **Send WebSocket notifications first.**
+  - MVP does not need FCM/APNs.
+
+- [ ] **Create push provider abstraction.**
+  - Interface:
+    - send_push
+  - Implement later:
+    - FCM
+    - APNs
+
+- [ ] **Store device tokens.**
+  - Table:
+    - user_id
+    - token
+    - platform
+    - active
+
+- [ ] **Deduplicate notifications.**
+  - Use event_id.
+  - Avoid repeated messages from retries.
+
+- [ ] **Add notification tests.**
+  - Event creates notification.
+  - Duplicate event ignored.
+
+### Done when:
+Order events produce user-facing notifications at least via WebSocket.
+
+---
+
+## Phase 15 — Admin, Support, and Ops APIs
+
+### Goal
+Provide control panels and operational safety.
+
+- [ ] **Create admin restaurant management APIs.**
+  - Approve restaurant.
+  - Suspend restaurant.
+  - Update delivery radius.
+
+- [ ] **Create admin order management APIs.**
+  - View order details.
+  - View order timeline.
+  - Cancel/refund order.
+
+- [ ] **Create admin driver management APIs.**
+  - View driver status.
+  - Suspend driver.
+  - Force offline.
+
+- [ ] **Create refund endpoint.**
+  - Route:
+    ```text
+    POST /api/v1/admin/orders/{order_id}/refund
+    ```
+  - Trigger payment provider refund.
+
+- [ ] **Create support case table.**
+  - Fields:
+    - id
+    - order_id
+    - user_id
+    - issue_type
+    - status
+    - resolution
+
+- [ ] **Create support ticket endpoints.**
+  - Create ticket.
+  - List tickets.
+  - Resolve ticket.
+
+- [ ] **Create audit logs.**
+  - Track admin actions.
+  - Store actor, action, target, timestamp.
+
+- [ ] **Create basic metrics dashboard data.**
+  - Total orders.
+  - Orders by status.
+  - Delivery assignment success rate.
+  - Average delivery time.
+
+### Done when:
+Admins can manage restaurants, drivers, orders, refunds, and support issues.
+
+---
+
+## Phase 16 — Testing Strategy
+
+### Goal
+Prove the system works and prevent regressions.
+
+- [ ] **Set up pytest and pytest-asyncio.**
+  - Use async test support.
+  - Use test fixtures.
+
+- [ ] **Create test database.**
+  - Use separate Postgres DB.
+  - Run Alembic migrations for tests.
+
+- [ ] **Use factory classes.**
+  - Create users, restaurants, menu items, orders easily.
+  - Use `factory-boy` or custom fixtures.
+
+- [ ] **Write unit tests for services.**
+  - Pricing service.
+  - State machine.
+  - Dispatch eligibility.
+  - ETA service.
+
+- [ ] **Write integration tests for APIs.**
+  - Auth.
+  - Restaurant search.
+  - Checkout.
+  - Payment webhook.
+  - Driver assignment.
+
+- [ ] **Test race conditions.**
+  - Two drivers accept same offer.
+  - Duplicate webhook.
+  - Duplicate checkout idempotency key.
+
+- [ ] **Test geospatial queries.**
+  - Inside/outside radius.
+  - Closed restaurants excluded.
+
+- [ ] **Test WebSocket flows.**
+  - Connect.
+  - Receive order update.
+  - Receive driver location.
+
+- [ ] **Add load testing.**
+  - Use Locust or k6.
+  - Test:
+    - nearby search
+    - checkout
+    - driver location stream
+    - tracking WebSocket connections
+
+- [ ] **Add CI pipeline.**
+  - Run lint.
+  - Run tests.
+  - Run migrations check.
+  - Build Docker image.
+
+### Done when:
+Critical flows are covered by automated tests and CI blocks broken builds.
+
+---
+
+## Phase 17 — Observability
+
+### Goal
+See what is happening in production.
+
+- [ ] **Add structured logs.**
+  - JSON logs.
+  - Include:
+    - request_id
+    - user_id
+    - route
+    - latency
+
+- [ ] **Add request ID middleware.**
+  - Generate UUID per request.
+  - Propagate to logs.
+
+- [ ] **Add metrics endpoint.**
+  - Route:
+    ```text
+    GET /metrics
+    ```
+  - Use Prometheus client.
+
+- [ ] **Track important metrics.**
+  - Request latency.
+  - Order creation count.
+  - Payment success/failure.
+  - Dispatch success rate.
+  - WebSocket active connections.
+  - Queue backlog.
+
+- [ ] **Add health and readiness endpoints.**
+  - `/health`
+  - `/ready`
+
+- [ ] **Check dependencies in health endpoint.**
+  - DB connection.
+  - Redis connection.
+  - RabbitMQ connection.
+
+- [ ] **Add error tracking.**
+  - Use Sentry or similar.
+  - Capture unhandled exceptions.
+
+- [ ] **Add distributed tracing.**
+  - Use OpenTelemetry.
+  - Trace API → service → DB → queue.
+
+- [ ] **Log state transitions.**
+  - Order lifecycle changes are critical.
+  - Keep audit table as source of truth.
+
+- [ ] **Add alerts.**
+  - High payment failure.
+  - Dispatch failure spike.
+  - Worker queue backlog.
+  - API 5xx rate.
+
+### Done when:
+You can debug production issues using logs, metrics, traces, and alerts.
+
+---
+
+## Phase 18 — Security Hardening
+
+### Goal
+Protect user data and platform integrity.
+
+- [ ] **Use HTTPS everywhere.**
+  - TLS termination at Nginx/Traefik.
+  - Redirect HTTP to HTTPS.
+
+- [ ] **Hash passwords strongly.**
+  - Argon2 recommended.
+  - No MD5/SHA1.
+
+- [ ] **Use short-lived access tokens.**
+  - Example:
+    - access token: 15–30 minutes
+    - refresh token: longer with rotation
+
+- [ ] **Add rate limiting.**
+  - Protect:
+    - login
+    - register
+    - checkout
+    - webhook
+    - WebSocket connect
+
+- [ ] **Validate all input.**
+  - Use Pydantic schemas.
+  - Reject unknown fields if needed.
+
+- [ ] **Protect webhooks.**
+  - Signature verification.
+  - Replay protection.
+  - IP allowlist if provider supports.
+
+- [ ] **Use CORS carefully.**
+  - Allow known frontend origins only.
+
+- [ ] **Add RBAC checks on every protected endpoint.**
+  - Never trust frontend role alone.
+
+- [ ] **Prevent IDOR attacks.**
+  - User can access only their own orders.
+  - Restaurant can access only their own resources.
+  - Driver can access only assigned orders.
+
+- [ ] **Store secrets securely.**
+  - No secrets in code.
+  - Use secret manager in production.
+
+- [ ] **Add SQL safety.**
+  - Use ORM/query builder.
+  - Avoid raw string interpolation.
+
+- [ ] **Add WebSocket authorization.**
+  - Authenticate before subscribing.
+  - Validate resource ownership.
+
+### Done when:
+The backend has basic production-grade authentication, authorization, rate limiting, and secret hygiene.
+
+---
+
+## Phase 19 — Deployment
+
+### Goal
+Deploy API, workers, databases, and queues reliably.
+
+- [ ] **Create API Dockerfile.**
+  - Multi-stage build.
+  - Non-root user.
+  - Install only runtime dependencies.
+
+- [ ] **Create worker Dockerfile.**
+  - Separate image or same image with different command.
+  - Workers should not serve HTTP traffic.
+
+- [ ] **Use Docker Compose for staging.**
+  - Services:
+    - api
+    - worker
+    - beat/scheduler if needed
+    - postgres
+    - redis
+    - rabbitmq
+    - nginx/traefik
+
+- [ ] **Run migrations as a separate step.**
+  - Do not run migrations inside every API pod at scale.
+  - Use migration job or startup command for small environments.
+
+- [ ] **Deploy API behind reverse proxy.**
+  - Use Nginx or Traefik.
+  - Enable WebSocket upgrade headers.
+
+- [ ] **Configure TLS certificates.**
+  - Use Let’s Encrypt or cloud certificates.
+
+- [ ] **Deploy workers separately.**
+  - Scale workers independently from API.
+  - Dispatch worker may need more CPU/DB access.
+
+- [ ] **Use managed databases in production if possible.**
+  - Managed Postgres with PostGIS.
+  - Managed Redis.
+  - Managed RabbitMQ or alternative.
+
+- [ ] **Configure backups.**
+  - Postgres PITR or daily backups.
+  - Redis persistence if needed.
+  - RabbitMQ queue persistence.
+
+- [ ] **Add graceful shutdown.**
+  - API should finish in-flight requests.
+  - Workers should ack/nack messages properly.
+
+- [ ] **Add zero-downtime deployment if possible.**
+  - Rolling deploy.
+  - Health checks before traffic shift.
+
+- [ ] **Create production environment variables.**
+  - Separate dev/staging/prod.
+  - Do not reuse secrets.
+
+### Done when:
+The system can run in Docker/Kubernetes with API, worker, DB, Redis, and queue separately.
+
+---
+
+## Phase 20 — Scaling and Advanced Features
+
+### Goal
+Improve performance and add marketplace intelligence.
+
+- [ ] **Add connection pooling.**
+  - Use PgBouncer for Postgres.
+  - Configure pool size carefully.
+
+- [ ] **Cache hot data.**
+  - Restaurant details.
+  - Menu items.
+  - Nearby search results.
+  - Driver latest location.
+
+- [ ] **Batch driver location writes.**
+  - Redis for real-time.
+  - Postgres for durable history.
+
+- [ ] **Use Redis Streams if you need replay.**
+  - Pub/Sub is fire-and-forget.
+  - Streams can store recent location events.
+
+- [ ] **Use H3 or GeoHash for dense dispatch.**
+  - Better for high-density driver matching.
+  - Helpful for cell-based dispatch.
+
+- [ ] **Improve ETA.**
+  - Start with distance heuristic.
+  - Later use:
+    - OSRM
+    - Google Maps
+    - historical delivery data
+
+- [ ] **Add restaurant delivery polygons.**
+  - Radius is simple.
+  - Polygons are more realistic.
+
+- [ ] **Add driver batching.**
+  - Assign multiple nearby orders to one driver if suitable.
+
+- [ ] **Add surge pricing.**
+  - High demand area.
+  - Low driver supply.
+
+- [ ] **Add promotions/coupons.**
+  - Coupon service.
+  - Validation rules.
+  - Usage limits.
+
+- [ ] **Add search service.**
+  - Postgres full-text search for MVP.
+  - Meilisearch/Elasticsearch later.
+
+- [ ] **Add ratings and reviews.**
+  - Customer can rate restaurant and driver.
+  - Restaurant can rate driver optionally.
+
+### Done when:
+The platform can handle higher traffic and supports realistic delivery operations.
+
+---
+
+# 3. Important API Checklist
+
+You can use this as your endpoint build list.
+
+## Auth
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
+
+## Restaurants
+- `POST /api/v1/restaurants`
+- `PATCH /api/v1/restaurants/{id}`
+- `GET /api/v1/restaurants/{id}`
+- `GET /api/v1/restaurants/nearby`
+- `POST /api/v1/restaurants/{id}/open`
+- `POST /api/v1/restaurants/{id}/close`
+
+## Menu
+- `POST /api/v1/menu-items`
+- `PATCH /api/v1/menu-items/{id}`
+- `DELETE /api/v1/menu-items/{id}`
+- `GET /api/v1/restaurants/{id}/menu`
+
+## Cart
+- `GET /api/v1/cart`
+- `POST /api/v1/cart/items`
+- `PATCH /api/v1/cart/items/{item_id}`
+- `DELETE /api/v1/cart/items/{item_id}`
+- `DELETE /api/v1/cart`
+
+## Orders
+- `POST /api/v1/orders/checkout`
+- `GET /api/v1/orders/{id}`
+- `GET /api/v1/orders/me`
+- `POST /api/v1/orders/{id}/cancel`
+
+## Restaurant Order Actions
+- `POST /api/v1/orders/{id}/accept`
+- `POST /api/v1/orders/{id}/reject`
+- `POST /api/v1/orders/{id}/preparing`
+- `POST /api/v1/orders/{id}/ready`
+
+## Driver Actions
+- `POST /api/v1/driver/status`
+- `GET /api/v1/driver/offers`
+- `POST /api/v1/delivery/offers/{offer_id}/accept`
+- `POST /api/v1/delivery/offers/{offer_id}/decline`
+- `POST /api/v1/orders/{id}/pickup`
+- `POST /api/v1/orders/{id}/deliver`
+
+## Payments
+- `POST /api/v1/payments/intent`
+- `POST /api/v1/payments/webhook`
+
+## WebSockets
+- `WS /ws/v1/driver/location`
+- `WS /ws/v1/orders/{order_id}/track`
+- `WS /ws/v1/driver/offers` optional
+
+---
+
+# 4. Important Database Tables Checklist
+
+Use this as your schema checklist.
+
+## Core
+- users
+- addresses
+- restaurants
+- menu_items
+- orders
+- order_items
+- payments
+
+## Delivery
+- driver_profiles
+- delivery_jobs
+- driver_offers
+- driver_location_history optional
+
+## Operations
+- order_events
+- outbox_events
+- notifications
+- support_tickets
+- admin_audit_logs
+
+---
+
+# 5. Important Redis Keys Checklist
+
+Use these keys for caching and real-time coordination.
+
+## Cart
+```text
+cart:user:{user_id}
+```
+
+## Idempotency
+```text
+idempotency:checkout:{user_id}:{key}
+```
+
+## Driver availability
+```text
+drivers:online
+driver:location:{driver_id}
+driver:heartbeat:{driver_id}
+```
+
+## Dispatch locking
+```text
+lock:dispatch:order:{order_id}
+```
+
+## Real-time channels
+```text
+order:status:{order_id}
+driver:location:{driver_id}
+driver:offers:{driver_id}
+```
+
+## Cache
+```text
+cache:restaurants:nearby:{lat}:{lng}:{radius}
+cache:restaurant:{restaurant_id}
+```
+
+---
+
+# 6. Important Event Checklist
+
+Use these events for your async system.
+
+## Order events
+```text
+order.created
+order.paid
+order.payment_failed
+order.accepted
+order.rejected
+order.preparing
+order.ready
+order.cancelled
+order.delivered
+```
+
+## Delivery events
+```text
+delivery.job_created
+delivery.offer_sent
+delivery.offer_accepted
+delivery.offer_declined
+delivery.offer_expired
+delivery.driver_assigned
+delivery.pickup_completed
+delivery.completed
+delivery.failed
+```
+
+## Driver events
+```text
+driver.online
+driver.offline
+driver.location_updated
+```
+
+## Notification events
+```text
+notification.send_order_status
+notification.send_driver_offer
+```
+
+---
+
+# 7. Order State Machine Reference
+
+Use this as your lifecycle map.
+
+```text
+PENDING_PAYMENT
+  -> PAID
+  -> PAYMENT_FAILED
+  -> EXPIRED
+
+PAID
+  -> RESTAURANT_ACCEPTED
+  -> RESTAURANT_REJECTED
+  -> CANCELLED
+
+RESTAURANT_ACCEPTED
+  -> PREPARING
+
+PREPARING
+  -> READY_FOR_PICKUP
+
+READY_FOR_PICKUP
+  -> DRIVER_ASSIGNED
+
+DRIVER_ASSIGNED
+  -> PICKED_UP
+
+PICKED_UP
+  -> DELIVERED
+
+Any paid state
+  -> REFUNDED if cancelled/rejected
+```
+
+---
+
+# 8. Recommended Build Order
+
+Do not build everything at once. Use this order.
+
+## Step 1
+Build:
+- FastAPI skeleton
+- Docker Compose
+- Postgres
+- Redis
+- migrations
+
+## Step 2
+Build:
+- auth
+- roles
+- user sessions
+
+## Step 3
+Build:
+- restaurants
+- menus
+- nearby search
+
+## Step 4
+Build:
+- cart
+- checkout
+- pending orders
+
+## Step 5
+Build:
+- payment webhook
+- paid orders
+- state machine
+
+## Step 6
+Build:
+- RabbitMQ/outbox
+- event consumers
+
+## Step 7
+Build:
+- driver online status
+- driver location WebSocket
+
+## Step 8
+Build:
+- dispatch engine
+- driver offers
+- assignment
+
+## Step 9
+Build:
+- customer tracking WebSocket
+- notifications
+
+## Step 10
+Build:
+- admin APIs
+- tests
+- observability
+- deployment
+
+---
+
+# 9. MVP vs L5 Production Features
+
+## MVP features
+- Auth
+- Restaurant/menu CRUD
+- Nearby search
+- Cart
+- Checkout
+- Payment webhook
+- Order state machine
+- Basic driver assignment
+- Live tracking
+
+## L5 production features
+- Idempotency everywhere
+- Transactional outbox
+- Dead letter queues
+- Distributed locks
+- Audit logs
+- Metrics/tracing
+- Rate limiting
+- Refund sagas
+- Horizontal scaling
+- Load testing
+- Chaos testing
+- Geo dispatch optimization
+
+---
+
+# 10. Final Checklist Before Going Live
+
+- [ ] All migrations run cleanly.
+- [ ] Auth and RBAC are tested.
+- [ ] Checkout pricing is server-side.
+- [ ] Payment webhook is verified and idempotent.
+- [ ] Order transitions are guarded.
+- [ ] Dispatch cannot assign two drivers to one order.
+- [ ] WebSockets authenticate users.
+- [ ] Redis Pub/Sub works across API instances.
+- [ ] Workers handle retries and DLQ.
+- [ ] Tests cover critical flows.
+- [ ] Metrics and alerts exist.
+- [ ] Backups are configured.
+- [ ] Secrets are not hardcoded.
+- [ ] API rate limiting is enabled.
+- [ ] Deployment supports WebSocket connections.
+
+---
+
+If you follow this roadmap in order, you will build a **production-shaped food delivery backend** with FastAPI instead of just a toy CRUD app.
