@@ -1,0 +1,206 @@
+# Food Delivery Backend (Zomato/Swiggy Clone) — Full Build Roadmap
+### Stack: Python + FastAPI + PostgreSQL/PostGIS + Redis + RabbitMQ/Celery
+
+This roadmap breaks the entire build into **phases → sub-tasks → one-line action points**, in the order you should actually build them. Follow it top to bottom.
+
+---
+
+## Phase 0 — Environment & Project Setup
+
+- Install Python 3.11+, PostgreSQL 15+ with PostGIS extension, Redis, RabbitMQ locally or via Docker.
+- Create project folder with a clean architecture layout: `app/`, `app/api/`, `app/models/`, `app/schemas/`, `app/services/`, `app/core/`, `app/workers/`.
+- Initialize a virtual environment and install `fastapi`, `uvicorn[standard]`, `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `pydantic-settings`.
+- Set up `pyproject.toml` or `requirements.txt` with pinned versions.
+- Create `app/core/config.py` using `pydantic-settings` to load env vars (DB URL, Redis URL, JWT secret, RabbitMQ URL).
+- Write a `docker-compose.yml` with services: `api`, `postgres` (postgis image), `redis`, `rabbitmq`, `celery-worker`.
+- Add a `.env.example` file listing all required environment variables.
+- Set up `app/main.py` with a basic FastAPI instance and a `/health` endpoint.
+- Configure CORS middleware for frontend/mobile clients.
+- Set up structured logging (e.g., `loguru` or Python `logging` with JSON formatter).
+- Initialize Git repo, add `.gitignore`, commit the skeleton.
+- Set up pre-commit hooks (`black`, `ruff`, `isort`) for code quality.
+
+---
+
+## Phase 1 — Database Design & Migrations
+
+- Enable PostGIS on the Postgres instance: `CREATE EXTENSION postgis;`.
+- Set up SQLAlchemy 2.0 async engine and session factory in `app/core/db.py`.
+- Configure Alembic for async migrations (`alembic init -t async migrations`).
+- Design and create the `users` table: id, email, hashed_password, role enum (`CUSTOMER/RESTAURANT/DRIVER/ADMIN`), timestamps.
+- Design and create the `restaurants` table: id, owner_id (FK to users), name, description, location (`GEOMETRY(Point,4326)`), is_active, rating.
+- Design and create the `menu_items` table: id, restaurant_id (FK), title, description, price, is_available, category.
+- Design and create the `orders` table: id, customer_id, restaurant_id, driver_id (nullable), status, total_amount, created_at.
+- Design and create the `order_items` table: id, order_id (FK), menu_item_id (FK), quantity, unit_price.
+- Design and create the `driver_profiles` table: id, user_id (FK), current_location (Point), is_online, vehicle_type.
+- Design and create the `payments` table: id, order_id (FK), provider, provider_ref_id, status, amount.
+- Add a `outbox_events` table for the Outbox Pattern (id, event_type, payload, is_processed, created_at).
+- Add indexes: GIST index on `restaurants.location` and `driver_profiles.current_location`, B-tree indexes on FKs.
+- Write and run the first Alembic migration to create all tables.
+- Seed the database with dummy restaurants, menu items, and driver profiles for local testing.
+
+---
+
+## Phase 2 — Auth & Role-Based Access Control (RBAC)
+
+- Create Pydantic schemas for `UserCreate`, `UserLogin`, `UserOut`.
+- Implement password hashing using `passlib[bcrypt]`.
+- Build `POST /api/v1/auth/register` to create users with a selected role.
+- Build `POST /api/v1/auth/login` to validate credentials and issue a JWT access token.
+- Implement JWT creation/decoding utilities in `app/core/security.py` using `python-jose`.
+- Add refresh-token support (`POST /api/v1/auth/refresh`) with short-lived access + long-lived refresh tokens.
+- Build a `get_current_user` FastAPI dependency that decodes JWT and fetches the user.
+- Build role-checking dependencies (e.g., `require_role("RESTAURANT")`) to protect endpoints.
+- Add rate limiting on login/register endpoints to prevent brute force (e.g., via `slowapi` or gateway-level).
+- Write unit tests for registration, login, and role-restricted access.
+
+---
+
+## Phase 3 — Restaurant & Menu Management APIs
+
+- Build `POST /api/v1/restaurants` — restaurant owner creates their restaurant profile.
+- Build `PATCH /api/v1/restaurants/{id}` — update restaurant details (name, active status, location).
+- Build `POST /api/v1/menu-items` — add a menu item (restricted to restaurant owner).
+- Build `PATCH /api/v1/menu-items/{id}` — update price/availability.
+- Build `DELETE /api/v1/menu-items/{id}` — soft-delete a menu item.
+- Build `GET /api/v1/restaurants/{id}/menu` — public endpoint to list a restaurant's menu.
+- Add pagination and filtering (category, price range) to menu listing.
+- Write validation logic to prevent restaurants from editing another owner's data (ownership check).
+- Write unit/integration tests for CRUD operations on restaurants and menu items.
+
+---
+
+## Phase 4 — Geospatial Search (PostGIS)
+
+- Write a raw SQL / SQLAlchemy query using `ST_DWithin` to find restaurants within a given radius of lat/lng.
+- Build `GET /api/v1/restaurants/nearby?lat=&lng=&radius_km=` returning sorted-by-distance restaurants.
+- Add `ST_Distance` to the query to return exact distance per restaurant for ETA estimation.
+- Cache frequent nearby-search results in Redis (geohash-keyed) to reduce DB load.
+- Add basic ETA calculation logic (distance ÷ average speed, or integrate a routing API later).
+- Load-test the nearby-search endpoint with dummy data (10k+ restaurant rows) to confirm index usage via `EXPLAIN ANALYZE`.
+
+---
+
+## Phase 5 — Cart & Checkout Pipeline
+
+- Design a Redis-backed cart schema: key `cart:{user_id}`, value = JSON list of `{menu_item_id, quantity}`.
+- Build `POST /api/v1/cart/items` — add/update item in cart.
+- Build `DELETE /api/v1/cart/items/{item_id}` — remove item from cart.
+- Build `GET /api/v1/cart` — retrieve current cart with live-recalculated prices.
+- Build `POST /api/v1/orders/checkout` — server-side validation: re-fetch prices from DB (never trust client), compute total.
+- Create the order record with status `PENDING_PAYMENT` inside a DB transaction.
+- Clear the Redis cart only after successful order creation.
+- Write tests to confirm price tampering on the client side is ignored.
+
+---
+
+## Phase 6 — Payments Integration
+
+- Integrate a payment provider SDK (Razorpay/Stripe) in `app/services/payment_service.py`.
+- Build `POST /api/v1/payments/create-intent` — generate a payment session tied to the order.
+- Build `POST /api/v1/payments/webhook` — verify webhook signature and handle payment events.
+- On successful payment webhook, transition order status `PENDING_PAYMENT → PAID` idempotently (check `provider_ref_id` isn't already processed).
+- Write to the `outbox_events` table within the same DB transaction as the status update (Outbox Pattern).
+- Build a background worker that polls/reads `outbox_events` and publishes `OrderPaidEvent` to RabbitMQ.
+- Implement a Saga/compensation flow: if downstream steps (e.g., driver assignment) fail, trigger an automatic refund.
+- Write tests simulating payment success, payment failure, and duplicate webhook delivery.
+
+---
+
+## Phase 7 — Order State Machine
+
+- Define the full state enum: `PENDING_PAYMENT, PAID, RESTAURANT_ACCEPTED, PREPARING, DRIVER_ASSIGNED, PICKED_UP, DELIVERED, CANCELLED`.
+- Implement a state-machine utility (e.g., using `python-statemachine` or a custom transition-validation function).
+- Enforce that every transition is idempotent — reject duplicate/invalid transitions with a 409 error.
+- Build `PATCH /api/v1/orders/{id}/status` — restricted by role (restaurant can only move PAID→PREPARING, etc.).
+- Log every state transition to an `order_status_history` table for auditability.
+- Write unit tests covering every valid and invalid transition path.
+
+---
+
+## Phase 8 — Event Broker & Driver Matching Engine (RabbitMQ + Celery)
+
+- Set up Celery with RabbitMQ as the broker in `app/workers/celery_app.py`.
+- Define the `OrderPaidEvent` consumer task that triggers the driver-matching workflow.
+- Query PostGIS for online drivers within a 1–2 km geohash ring of the restaurant.
+- Rank candidate drivers by distance and/or acceptance rate.
+- Acquire a distributed lock on the order ID using Redis Redlock before dispatching offers.
+- Send a time-bound (15s) offer to the top candidate driver via push notification/WebSocket.
+- If the driver doesn't respond in time, release the lock and offer to the next candidate.
+- On driver acceptance, update `orders.driver_id`, transition status to `DRIVER_ASSIGNED`, and release the lock.
+- Set up a Dead Letter Queue (DLQ) for failed/expired matching jobs for later inspection.
+- Write integration tests simulating two drivers accepting simultaneously to confirm no double-assignment.
+
+---
+
+## Phase 9 — Real-Time Location & WebSocket Tracking
+
+- Build a FastAPI WebSocket route `WS /ws/v1/driver/location` for drivers to stream GPS coordinates every 3–5s.
+- On each location update, write the latest position to Redis (`driver:location:{driver_id}`).
+- Publish the location update to a Redis Pub/Sub channel (`driver:location:{driver_id}`).
+- Build a FastAPI WebSocket route `WS /ws/v1/orders/{order_id}/track` for customers to subscribe to their driver's channel.
+- Handle WebSocket reconnection/auth via a short-lived token passed at connection time.
+- Ensure the pub/sub design works across multiple FastAPI instances (any instance can broadcast to any connected client).
+- Add a fallback REST endpoint `GET /api/v1/orders/{id}/driver-location` for clients that can't maintain a WebSocket.
+- Write tests/mocks simulating multiple concurrent driver location streams.
+
+---
+
+## Phase 10 — Notifications
+
+- Integrate a push notification service (FCM/APNs) or SMS/email provider for order updates.
+- Build a notification service that listens to order status changes and triggers the right alert (order accepted, driver assigned, delivered).
+- Add customer-facing in-app notifications table for history/read status.
+- Debounce/batch notifications to avoid spamming users during rapid status changes.
+
+---
+
+## Phase 11 — Admin, Ratings & Analytics
+
+- Build admin-only endpoints to view/manage all orders, restaurants, and users.
+- Build `POST /api/v1/orders/{id}/rating` — customer rates the order/driver/restaurant after delivery.
+- Aggregate ratings into a running average on `restaurants` and `driver_profiles`.
+- Build basic analytics endpoints: orders per day, average delivery time, top restaurants.
+- Add an admin dashboard-ready endpoint set (or hook up a lightweight internal dashboard).
+
+---
+
+## Phase 12 — Testing & Quality
+
+- Set up `pytest` with `pytest-asyncio` and a dedicated test database.
+- Write unit tests per service layer (auth, orders, payments, matching).
+- Write integration tests per API route using FastAPI's `TestClient`/`httpx.AsyncClient`.
+- Write load tests for critical paths (checkout, nearby search, driver matching) using `locust` or `k6`.
+- Add test coverage reporting and set a minimum coverage threshold in CI.
+
+---
+
+## Phase 13 — DevOps & Deployment
+
+- Write production-grade `Dockerfile` for the FastAPI app (multi-stage build).
+- Finalize `docker-compose.yml` for local full-stack spin-up (api + db + redis + rabbitmq + worker).
+- Set up Traefik or Nginx as reverse proxy/API gateway with TLS termination.
+- Add JWT validation and basic rate limiting at the gateway level.
+- Set up CI/CD pipeline (GitHub Actions) to run tests, lint, and build/push Docker images on merge.
+- Configure environment-specific settings (dev/staging/prod) via env vars/secrets manager.
+- Deploy to a cloud provider (AWS/GCP/DigitalOcean) using ECS/Kubernetes/simple VM as appropriate for scale.
+- Set up database backups and a migration rollback strategy.
+
+---
+
+## Phase 14 — Observability & Scaling
+
+- Add structured logging with correlation/request IDs across services.
+- Integrate Prometheus + Grafana (or a hosted equivalent) for metrics: request latency, queue depth, WebSocket connections.
+- Add distributed tracing (OpenTelemetry) across API → Celery worker → DB calls.
+- Set up alerting for critical failures (payment webhook errors, matching job failures, DB connection issues).
+- Load-test the system end-to-end and identify bottlenecks (DB connection pool size, Redis throughput, WebSocket fan-out).
+- Plan horizontal scaling: stateless FastAPI instances behind the gateway, Redis for shared state, sticky-session-free WebSocket design.
+- Document the final architecture with a system diagram and API reference (OpenAPI/Swagger auto-generated by FastAPI).
+
+---
+
+### Suggested Build Order (Summary)
+`Phase 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14`
+
+Each phase is independently testable — don't move to the next phase until the current one has working endpoints and passing tests. This mirrors how an L5 engineer would actually sequence this build: **foundation → core CRUD → async/event-driven pieces → real-time layer → polish/scale.**
